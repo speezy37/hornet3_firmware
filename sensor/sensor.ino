@@ -1,9 +1,8 @@
+#include <Wire.h>
+#include <Servo.h>
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "HMC5883L.h"
-#include "MadgwickAHRS.h"
-#include <Wire.h>
-#include <Servo.h>
 #include "MS5837.h"
 
 static unsigned char auchCRCHi[] = {
@@ -28,9 +27,9 @@ static unsigned char auchCRCHi[] = {
 } ; 
 
 static char auchCRCLo[] = {
-0x00, 0xC0, 0xC1, 0x01, 0xC3, 0x03, 0x02, 0xC2, 0xC6, 0x06, 0x07, 0xC7, 0x05, 0xC5, 0xC4,
-0x04, 0xCC, 0x0C, 0x0D, 0xCD, 0x0F, 0xCF, 0xCE, 0x0E, 0x0A, 0xCA, 0xCB, 0x0B, 0xC9, 0x09,
-0x08, 0xC8, 0xD8, 0x18, 0x19, 0xD9, 0x1B, 0xDB, 0xDA, 0x1A, 0x1E, 0xDE, 0xDF, 0x1F, 0xDD,
+0x00, 0xC0, 0xC1, 0x01, 0xC3, 0x03, 0x02, 0xC2, 0xC6, 0x06, 0x07, 0xC7, 0x05, 0xC5, 0xC4, 0x04, 
+0xCC, 0x0C, 0x0D, 0xCD, 0x0F, 0xCF, 0xCE, 0x0E, 0x0A, 0xCA, 0xCB, 0x0B, 0xC9, 0x09, 0x08, 0xC8, 
+0xD8, 0x18, 0x19, 0xD9, 0x1B, 0xDB, 0xDA, 0x1A, 0x1E, 0xDE, 0xDF, 0x1F, 0xDD,
 0x1D, 0x1C, 0xDC, 0x14, 0xD4, 0xD5, 0x15, 0xD7, 0x17, 0x16, 0xD6, 0xD2, 0x12, 0x13, 0xD3,
 0x11, 0xD1, 0xD0, 0x10, 0xF0, 0x30, 0x31, 0xF1, 0x33, 0xF3, 0xF2, 0x32, 0x36, 0xF6, 0xF7,
 0x37, 0xF5, 0x35, 0x34, 0xF4, 0x3C, 0xFC, 0xFD, 0x3D, 0xFF, 0x3F, 0x3E, 0xFE, 0xFA, 0x3A,
@@ -56,11 +55,11 @@ static char auchCRCLo[] = {
 #define ADDRESS   0x02
 #define RS485PIN  2
 
-uint16_t crcData, crcBuf, addrBuf, funcBuf, regBuf, lenBuf;
-uint8_t crcH, crcL, led13;
-uint8_t buf[50];
-uint8_t inBuf[50];
-uint8_t outBuf[50];
+#define BAUD_RATE	19200
+#define TIMEOUT		5
+
+#define PRESSURE_INTERVAL	500
+#define IMU_INTERVAL	40
 
 union {
   unsigned long bite;
@@ -99,9 +98,6 @@ struct {
   
 } Data ;
 
-//==================================================================================
-short *pointer = &Data.raxHi;
-
 unsigned short CRC16(
   unsigned char *puchMsg,           /* message to calculate CRC upon */
   unsigned short usDataLen          /* quantity of bytes in message */
@@ -126,28 +122,15 @@ void storeFloat(float input, short *pointer){
   pointer++;
   *pointer = extract.bite & 0x0FFFF;
 }
-
-//================================================
-//          Pressure Sensor variables
-//================================================
-unsigned long milliNow, milliPrev;
-const int analogInPin = A0;
-const int analogPin2 =A1;
-
-float vOut = 0.0;
-float vIn = 0.0;
-float pressure = 0;        // value read from the humidsens
-
 //*****************
 //* IMU variables *
 //*****************
 HMC5883L mag;
 MPU6050 accelgyro;
-short ax, ay, az, gx, gy, gz, mx, my, mz;
-float rax, ray, raz, rgx, rgy, rgz;
-unsigned long microsPerReading, microsPrevious;
+MS5837 sensor;
 
-//===============================================================
+unsigned long PressCheck, IMUCheck;
+
 // functions for IMU
 float convertRawAccel(int16_t raw) {
   return 2.0f*(float)raw/32768.0f;
@@ -157,144 +140,118 @@ float convertRawGyr(int16_t raw) {
   return 500.0f*(float)raw/32768.0f;
 }
 
-//=============================
-//   DEPTH
-//=============================
-MS5837 sensor;
-
-//===============================================================
 void setup() {
-  // join I2C bus (I2Cdev library doesn't do this automatically)
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-  Wire.begin();
-#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-  Fastwire::setup(400, true);
-#endif
-  Serial.begin(19200);
-  Serial.setTimeout(5);
-  
-  pinMode(RS485PIN, OUTPUT);
-  digitalWrite(RS485PIN, LOW);
-  
-  // initialize device
-  mag.initialize();
-  accelgyro.initialize();
-  accelgyro.setI2CBypassEnabled(true);
+	// join I2C bus (I2Cdev library doesn't do this automatically)
+	#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+	Wire.begin();
+	#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+	Fastwire::setup(400, true);
+	#endif
+	
+	Serial.begin(BAUD_RATE);
+	Serial.setTimeout(TIMEOUT);
 
-  //Set the scale on the accelerometer and gyroscope
-  accelgyro.setFullScaleGyroRange(MPU6050_GYRO_FS_500);
-  accelgyro.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
-  
-  microsPerReading = 40000;
-  microsPrevious = micros();
-  milliPrev = millis();
+	pinMode(RS485PIN, OUTPUT);
+	digitalWrite(RS485PIN, LOW);
 
-  sensor.init();
-  sensor.setFluidDensity(997); // kg/m^3 (997 freshwater, 1029 for seawater)
+	// initialize device
+	mag.initialize();
+	accelgyro.initialize();
+	accelgyro.setI2CBypassEnabled(true);
+
+	//Set the scale on the accelerometer and gyroscope
+	accelgyro.setFullScaleGyroRange(MPU6050_GYRO_FS_500);
+	accelgyro.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
+
+	IMUCheck = millis();
+	PressCheck = millis();
+
+	sensor.init();
+	sensor.setFluidDensity(997); // kg/m^3 (997 freshwater, 1029 for seawater)
 }
 
-void loop() {   
-  //=============================================================== 
-  //                        MAIN LOOP
-  //=============================================================== 
-
+void loop(){
   //=========
   //   IMU 
   //=========
-  unsigned long microsNow;
-  // check if it's time to read data and update the filter
-  microsNow = micros();
-  if (microsNow - microsPrevious >= microsPerReading) {
-    accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    mag.getHeading(&mx, &my, &mz);
-    
-    rax = convertRawAccel(ax);
-    storeFloat(rax, &Data.raxHi);
-    
-    ray = convertRawAccel(ay);
-    storeFloat(ray, &Data.rayHi);
-    
-    raz = convertRawAccel(az);
-    storeFloat(raz, &Data.razHi);
-    
-    rgx = convertRawGyr(gx);
-    storeFloat(rgx, &Data.rgxHi);
-    
-    rgy = convertRawGyr(gy);
-    storeFloat(rgy, &Data.rgyHi);
-    
-    rgz = convertRawGyr(gz);
-    storeFloat(rgz, &Data.rgzHi);
+	unsigned long milliNow = millis();
+	if (milliNow - IMUCheck >= IMU_INTERVAL) {
+		short ax, ay, az, gx, gy, gz;
+		accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+		mag.getHeading(&Data.mx, &Data.my, &Data.mz);
 
-    Data.mx = mx;
-    Data.my = my;
-    Data.mz = mz;
+		storeFloat(convertRawAccel(ax), &Data.raxHi);    
+		storeFloat(convertRawAccel(ay), &Data.rayHi);
+		storeFloat(convertRawAccel(az), &Data.razHi);  
 
-   //increment previous time, so we keep proper pace
-    microsPrevious = microsPrevious + microsPerReading;  
-  }
+		storeFloat(convertRawGyr(gx), &Data.rgxHi);
+		storeFloat(convertRawGyr(gy), &Data.rgyHi);
+		storeFloat(convertRawGyr(gz), &Data.rgzHi);
+
+		//increment previous time, so we keep proper pace
+		IMUCheck += IMU_INTERVAL;  
+	}
 
   //==================
   // Pressure Sensor  
   //==================
-  milliNow = millis();
-  if((milliNow - milliPrev) > 500){
-    vOut = 3.3 * analogRead(A0) / 1023;
-    vIn = 3.3 * analogRead(A1) / 1023;
-    pressure = 0.01 * (vOut / vIn + 0.48571) / 0.00876;
+  if((milliNow - PressCheck) > PRESSURE_INTERVAL){
+    float vOut = 3.3 * analogRead(A0) / 1023;
+    float vIn = 3.3 * analogRead(A1) / 1023;
+    float pressure = 0.01 * (vOut / vIn + 0.48571) / 0.00876;
 
     storeFloat(pressure, &Data.pressureHi);
-    milliPrev = millis();
-    
+    PressCheck += PRESSURE_INTERVAL;
   } 
 } // end of main loop
 
 void serialEvent() {
-  uint8_t len = Serial.readBytes(buf, 50);
-  pointer = &Data.raxHi;    
-  
-  addrBuf = buf[0];
+	uint8_t buf[50];
+	uint8_t len = Serial.readBytes(buf, 50);
+	short *pointer = &Data.raxHi;
 
-  //correct address
-  if(addrBuf == ADDRESS){
-    crcBuf = (buf[len - 2] << 8 | buf[len - 1]);
-    crcData = CRC16(buf, len - 2);
+	byte addrBuf = buf[0];
 
-    //correct CRC
-    if(crcBuf == crcData){
-      //function code
-      funcBuf = buf[1];
-      
-      //register
-      regBuf = buf[2] << 8 | buf[3];
+	//correct address
+	if(addrBuf == ADDRESS){
+		short crcBuf = (buf[len - 2] << 8 | buf[len - 1]);
+		short crcData = CRC16(buf, len - 2);
 
-      if(funcBuf == 0x03){ // read function
-        pointer += regBuf;
-        lenBuf = buf[5]*2;
+		//correct CRC
+		if(crcBuf == crcData){
+			//function code
+			byte funcBuf = buf[1];
 
-        outBuf[0] = buf[0];
-        outBuf[1] = buf[1];
-        outBuf[2] = lenBuf;
-        
-        for(int i=0; i<lenBuf; i+=2){
-          outBuf[3+i]=*pointer >> 8;
-          outBuf[4+i]=*pointer & 0x0FF;
-          pointer++;
-        }
+			//register
+			short regBuf = buf[2] << 8 | buf[3];
 
-        crcData = CRC16(outBuf, lenBuf+3);
-        outBuf[3+lenBuf] = crcData >> 8;
-        outBuf[4+lenBuf] = crcData & 0x0FF;
+			if(funcBuf == 0x03){ // read function
+				pointer += regBuf;
+				short lenBuf = buf[5]*2;
+				
+				uint8_t outBuf[50];
+				outBuf[0] = buf[0];
+				outBuf[1] = buf[1];
+				outBuf[2] = lenBuf;
 
-        digitalWrite(RS485PIN, HIGH);
-                
-        //return frame
-        Serial.write(outBuf, 5+lenBuf);
-        Serial.flush();
-        
-        digitalWrite(RS485PIN, LOW);
-      }        
-    }
-  }
+				for(int i=0; i < lenBuf; i += 2){
+					outBuf[3+i] = *pointer >> 8;
+					outBuf[4+i] = *pointer & 0x0FF;
+					pointer++;
+				}
+
+				crcData = CRC16(outBuf, lenBuf+3);
+				outBuf[3+lenBuf] = crcData >> 8;
+				outBuf[4+lenBuf] = crcData & 0x0FF;
+
+				digitalWrite(RS485PIN, HIGH);
+						
+				//return frame
+				Serial.write(outBuf, 5+lenBuf);
+				Serial.flush();
+
+				digitalWrite(RS485PIN, LOW);
+			}        
+		}
+	}
 }
-
