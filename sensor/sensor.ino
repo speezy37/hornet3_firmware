@@ -47,11 +47,6 @@ static char auchCRCLo[] = {
 0x40
 } ;
 
-//===============================================================
-//                       INITIALISATION
-//===============================================================
-
-// FOR MODBUS
 #define ADDRESS   0x02
 #define RS485PIN  2
 
@@ -61,12 +56,7 @@ static char auchCRCLo[] = {
 #define PRESSURE_INTERVAL	500
 #define IMU_INTERVAL	40
 
-union {
-  unsigned long bite;
-  float data;
-} extract;
-
-// structure combination of IMU and pressure variables
+// register list
 struct {
   short raxHi;
   short raxLo;
@@ -98,6 +88,7 @@ struct {
   
 } Data ;
 
+// 16 bit CRC value for modbus
 unsigned short CRC16(
   unsigned char *puchMsg,           /* message to calculate CRC upon */
   unsigned short usDataLen          /* quantity of bytes in message */
@@ -116,29 +107,35 @@ unsigned short CRC16(
   return (uchCRCHi << 8 | uchCRCLo);
 }
 
+// convert float to 4 byte format
+union {
+  unsigned long bite;
+  float data;
+} extract;
+
+// store float data to registers
 void storeFloat(float input, short *pointer){
   extract.data = input;
   *pointer = extract.bite >> 16;
   pointer++;
   *pointer = extract.bite & 0x0FFFF;
 }
-//*****************
-//* IMU variables *
-//*****************
+
+// convert accel reading to true value
+float convertRawAccel(int16_t raw) {
+  return 2.0f*(float)raw/32768.0f;
+}
+// conver gyro reading to true value
+float convertRawGyr(int16_t raw) {
+  return 500.0f*(float)raw/32768.0f;
+}
+
+// initialisation
 HMC5883L mag;
 MPU6050 accelgyro;
 MS5837 sensor;
 
 unsigned long PressCheck, IMUCheck;
-
-// functions for IMU
-float convertRawAccel(int16_t raw) {
-  return 2.0f*(float)raw/32768.0f;
-}
-
-float convertRawGyr(int16_t raw) {
-  return 500.0f*(float)raw/32768.0f;
-}
 
 void setup() {
 	// join I2C bus (I2Cdev library doesn't do this automatically)
@@ -205,6 +202,7 @@ void loop(){
   } 
 } // end of main loop
 
+// serial for modbus
 void serialEvent() {
 	uint8_t buf[50];
 	uint8_t len = Serial.readBytes(buf, 50);
