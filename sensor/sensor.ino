@@ -4,6 +4,9 @@
 #include "MPU6050.h"
 #include "HMC5883L.h"
 #include "MS5837.h"
+#include <Arduino.h>
+#include <U8x8lib.h>
+#include <stdlib.h>
 
 static unsigned char auchCRCHi[] = {
   0x00, 0xC1, 0x81, 0x40, 0x01, 0xC0, 0x80, 0x41, 0x01, 0xC0, 0x80, 0x41, 0x00, 0xC1, 0x81, 0x40, 
@@ -133,8 +136,21 @@ float convertRawGyr(int16_t raw) {
 HMC5883L mag;
 MPU6050 accelgyro;
 MS5837 sensor;
+U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
 
 unsigned long pressureTime, accelGyroTime, magTime, depthTime;
+
+void draw(){
+  u8x8.drawString( 0, 0, "PRESSURE  SENSOR");
+  u8x8.drawString( 0, 4, "          BAR   ");
+}
+
+void updateOled(float data){
+  char test[5];
+  
+  dtostrf(data,5,2,test);
+  u8x8.drawString( 4, 4, test); 
+}
 
 void setup() {
   // initialize communication bus
@@ -146,6 +162,12 @@ void setup() {
   pinMode(RS485PIN, OUTPUT);
   digitalWrite(RS485PIN, LOW);
 
+  // initialize oled display
+  u8x8.begin();
+  u8x8.setPowerSave(0);
+  u8x8.setFont(u8x8_font_amstrad_cpc_extended_r);
+  draw();
+  
   // initialize magnetometer
   mag.initialize();
 
@@ -201,9 +223,10 @@ void loop(){
     float vOut = 3.3 * analogRead(A0) / 1023;
     float vIn = 3.3 * analogRead(A1) / 1023;
     float pressure = 0.01 * (vOut / vIn + 0.48571) / 0.00876;
-
+	updateOled(pressure);
+	
     storeFloat(pressure, &Data.pressureHi);
-    pressureTime += PRESSURE_INTERVAL;
+    pressureTime += PRESSURE_INTERVAL;	
   } 
 } // end of main loop
 
