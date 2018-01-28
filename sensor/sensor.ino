@@ -1,12 +1,10 @@
-#include <Wire.h>
-#include <Servo.h>
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "HMC5883L.h"
-#include "MS5837.h"
 #include <Arduino.h>
 #include <U8x8lib.h>
 #include <stdlib.h>
+#include "MS5837.h" // For Depth Sensor
 
 static unsigned char auchCRCHi[] = {
   0x00, 0xC1, 0x81, 0x40, 0x01, 0xC0, 0x80, 0x41, 0x01, 0xC0, 0x80, 0x41, 0x00, 0xC1, 0x81, 0x40, 
@@ -55,7 +53,7 @@ static char auchCRCLo[] = {
 #define PRESSURE_INTERVAL	500
 #define ACCEL_GYRO_INTERVAL	40
 #define MAG_INTERVAL		40
-#define DEPTH_INTERVAL		100
+#define DEPTH_INTERVAL		20
 
 // register list
 struct {
@@ -137,9 +135,10 @@ HMC5883L mag;
 MPU6050 accelgyro;
 MS5837 sensor;
 U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
+int count; // for depth sensor
 
-unsigned long pressureTime, accelGyroTime, magTime, depthTime;
-
+unsigned long pressureTime, accelGyroTime, magTime, depthTime, depthDelay;
+float depPressure, depTemperature, depDepth, depAltitude;
 void draw(){
   u8x8.drawString( 0, 0, "PRESSURE  SENSOR");
   u8x8.drawString( 0, 4, "          BAR   ");
@@ -178,22 +177,46 @@ void setup() {
   accelgyro.setFullScaleAccelRange(MPU6050_ACCEL_FS_2);
   
   // initialize depth sensor
-  sensor.init();
-  sensor.setFluidDensity(997);
+  sensor.init(); // For Depth Sensor
+  sensor.setFluidDensity(997); // kg/m^3 (997 freshwater, 1029 for seawater)
   
   // sync time for reading
-  accelGyroTime = pressureTime = magTime = depthTime = millis();
+  accelGyroTime = pressureTime = magTime = depthTime = depthDelay = millis();
 }
 
 void loop(){
   unsigned long milliNow = millis();
   
   // depth sensor
-  // if (milliNow - depthTime >= DEPTH_INTERVAL) {
-	
-	// depthTime += DEPTH_INTERVAL;
-  // }
-  
+  if (milliNow - depthTime >= DEPTH_INTERVAL) {
+    count++;
+    //===================================================
+    // the following codes replaces ==> sensor.read();
+    if (count == 1) {
+      sensor.reqD1();
+    }
+    if (count == 2) {
+      sensor.readD1();
+      sensor.reqD2();
+    }
+    if (count == 3) {
+      sensor.readD2();
+    //===================================================
+      depDepth = sensor.depth();
+      
+      // convert & store accelerometer readings
+      storeFloat(depDepth, &Data.depthHi);
+      storeFloat(depDepth, &Data.depthLo);
+
+      
+      //depAltitude = sensor.altitude();
+      //depPressure = sensor.pressure();
+      //depTemperature = sensor.temperature();
+      count=0;
+    }
+    depthTime += DEPTH_INTERVAL;
+  }
+
   // Accelerometer & Gyroscope
   if (milliNow - accelGyroTime >= ACCEL_GYRO_INTERVAL) {
     short ax, ay, az, gx, gy, gz;
@@ -226,8 +249,9 @@ void loop(){
 	updateOled(pressure);
 	
     storeFloat(pressure, &Data.pressureHi);
-    pressureTime += PRESSURE_INTERVAL;	
-  } 
+    pressureTime += PRESSURE_INTERVAL;
+  }
+  
 } // end of main loop
 
 // serial for modbus
