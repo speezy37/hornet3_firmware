@@ -1,5 +1,3 @@
-#include <Wire.h>
-#include <Servo.h>
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "HMC5883L.h"
@@ -226,7 +224,7 @@ void loop(){
 	updateOled(pressure);
 	
     storeFloat(pressure, &Data.pressureHi);
-    pressureTime += PRESSURE_INTERVAL;	
+    pressureTime += PRESSURE_INTERVAL;
   } 
 } // end of main loop
 
